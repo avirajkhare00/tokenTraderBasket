@@ -225,7 +225,7 @@ contract TokenTraderBasket is Token {
         var storeOpenOrder = orderBaskets[_orderuuid];
         
         storeOpenOrder.orderuuid = _orderuuid;
-        storeOpenOrder.seller = msg.sender;
+        storeOpenOrder.seller = _seller;
         storeOpenOrder.sellerTokens = _sellerTokens;
         storeOpenOrder.sellerTokenQty = _sellerTokenQty;
         storeOpenOrder.bidPrice = _bidPrice;
