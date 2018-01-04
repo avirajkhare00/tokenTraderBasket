@@ -1,4 +1,4 @@
-pragma solidity ^0.4.4;
+pragma solidity ^0.4.11;
 
 contract Token {
 
@@ -43,20 +43,11 @@ contract Token {
 
 contract TokenTraderBasket is Token {
     
-    event MakeOrder(bytes32 indexed _orderuuid, address _seller, address[] _sellerTokens, uint256[] _sellerTOkenQty, uint256 _bidPrice);
-    
-    event GeneralErrorEvent(uint256 _statusCode, string _statusText);
-    
-    event tokenTransfer(address indexed _seller, address indexed _tokenAddress, uint256 _tokenQty);
-    
-    event EtherTransfer(address _buyer, address _seller, uint256 _etherQty);
-    
     address owner;
-    address previousContractAddr;
     
     function TokenTraderBasket () {
         owner = msg.sender;
-    }
+    } 
     
     struct orderBasket {
         bytes32 orderuuid;
@@ -73,12 +64,19 @@ contract TokenTraderBasket is Token {
     mapping (bytes32 => orderBasket) orderBaskets;
     bytes32[] public orderBasketsAccts;
     
-    function makeOrder(bytes32 _orderuuid, address[] _sellerTokens, uint256[] _sellerTokenQty, uint256 _bidPrice) public returns (bytes32) {
+    function makeOrder(bytes32 _orderuuid, address[] _sellerTokens, uint256[] _sellerTokenQty, uint256 _bidPrice) public returns (bool) {
         
         var createOrderBasket = orderBaskets[_orderuuid];
         
         if(createOrderBasket.orderInitialized == true){
-            GeneralErrorEvent(1, "order with same id already exist, reverting!");
+            revert();
+        }
+        
+        if(createOrderBasket.orderCompleted == true){
+            revert();
+        }
+        
+        if(createOrderBasket.orderClose == true){
             revert();
         }
         
@@ -91,23 +89,27 @@ contract TokenTraderBasket is Token {
         
         orderBasketsAccts.push(_orderuuid) -1;
         
-        MakeOrder(_orderuuid, msg.sender, _sellerTokens, _sellerTokenQty, _bidPrice);
-        
-        return _orderuuid;
+        return true;
     }
     
     function allowAndPull(bytes32 _orderuuid) public returns (bool) {
         
         var oAllowTransfer = orderBaskets[_orderuuid];
         
+        if(oAllowTransfer.orderInitialized == false){
+            revert();
+        }
+        
         //function only to be executed by orderCreator
         if(oAllowTransfer.seller != msg.sender){
-            GeneralErrorEvent(2, "order id does not match with order creator address, reverting!");
             revert();
         }
         
         if(oAllowTransfer.orderCompleted == true){
-            GeneralErrorEvent(3, "order is already completed, reverting!");
+            revert();
+        }
+        
+        if(oAllowTransfer.orderClose == true){
             revert();
         }
         
@@ -119,22 +121,20 @@ contract TokenTraderBasket is Token {
             }
             else{
                 //condition is not fulfilled
-                GeneralErrorEvent(4, "allowance on token not set, create order again, reverting!");
                 revert();
-                //reverseOrder(_orderuuid, transferCounter);
-                break;
             }
         }
+        
+        transferCounter = 0;
         
         if(oAllowTransfer.sellerTokens.length == transferCounter){
             while(transferCounter < oAllowTransfer.sellerTokens.length){
                 if(transferSellerToken(oAllowTransfer.sellerTokens[transferCounter], oAllowTransfer.seller, address(this), oAllowTransfer.sellerTokenQty[transferCounter])){
                     //add token transfer event here
-                    tokenTransfer(msg.sender, oAllowTransfer.sellerTokens[transferCounter], oAllowTransfer.sellerTokenQty[transferCounter]);
+                    transferCounter += 1;
                 }else{
                     //add error while transfering token, maybe enough gas not set
                     revert();
-                    GeneralErrorEvent(5, "error while transfering token");
                 }
             }
         }
@@ -146,38 +146,19 @@ contract TokenTraderBasket is Token {
         return true;
     }
     
-    //to be run only by admin and remove private type
-    function reverseOrder(bytes32 _orderuuid, uint _reverseCount) private {
-        
-        var oReverseOrder = orderBaskets[_orderuuid];
-        
-        uint reverseOrderCounter = 0;
-        
-        while(reverseOrderCounter < _reverseCount){
-            Token(oReverseOrder.sellerTokens[reverseOrderCounter]).transfer(oReverseOrder.seller, oReverseOrder.sellerTokenQty[reverseOrderCounter]);
-            reverseOrderCounter += 1;
-        }
-        
-        oReverseOrder.orderCompleted = false;
-
-    }
-    
-    function transferTokenBuyer(bytes32 _orderuuid) public payable {
+    function transferTokenBuyer(bytes32 _orderuuid) public payable returns (bool) {
         
         var oTransferBuyer = orderBaskets[_orderuuid];
         
         if(oTransferBuyer.orderInitialized == false){
-            GeneralErrorEvent(6, "order does not exist, reverting!");
             revert();
         }
         
         if(oTransferBuyer.orderClose == true){
-            GeneralErrorEvent(7, "trade already done, reverting!");
             revert();
         }
         
         if(oTransferBuyer.bidPrice > msg.value){
-            GeneralErrorEvent(8, "selling price greater then ether sent, reverting!");
             revert();
         }
         
@@ -186,66 +167,15 @@ contract TokenTraderBasket is Token {
             uint buyerTransferCounter = 0;
             while(buyerTransferCounter < oTransferBuyer.sellerTokens.length){
                 Token(oTransferBuyer.sellerTokens[buyerTransferCounter]).transfer(msg.sender,oTransferBuyer.sellerTokenQty[buyerTransferCounter]);
-                tokenTransfer(msg.sender, oTransferBuyer.sellerTokens[buyerTransferCounter], oTransferBuyer.sellerTokenQty[buyerTransferCounter]);
                 buyerTransferCounter += 1;
             }
             
             oTransferBuyer.seller.transfer(msg.value);
             oTransferBuyer.orderClose = true;
             
-            EtherTransfer(msg.sender, oTransferBuyer.seller, msg.value);
+            return true;
             
         }
-    }
-    
-    function showAllOrderuuids() public constant returns (bytes32[]) {
-        return orderBasketsAccts;
-    }
-    
-    //function to transfer all open orders in case new contract gets deployed
-    function transferOpenOrders(address newContractAddr) public returns (bool) {
-        uint orderTransferCounter=0;
-        while(orderTransferCounter < orderBasketsAccts.length){
-            var orderForTransfer = orderBaskets[orderBasketsAccts[orderTransferCounter]];
-            if(orderForTransfer.orderClose == false){
-                if(TokenTraderBasket(newContractAddr).getOpenOrders(orderForTransfer.orderuuid, orderForTransfer.seller, orderForTransfer.sellerTokens, orderForTransfer.sellerTokenQty, orderForTransfer.bidPrice, orderForTransfer.orderCompleted)){
-                    orderTransferCounter += 1;
-                }
-            }
-        }
-    }
-    
-    //function to receive all open orders
-    function getOpenOrders(bytes32 _orderuuid, address _seller, address[] _sellerTokens, uint256[] _sellerTokenQty, uint256 _bidPrice, bool _orderCompleted) public returns (bool) {
-        
-        if(previousContractAddr != msg.sender){
-            revert();
-        }
-        
-        var storeOpenOrder = orderBaskets[_orderuuid];
-        
-        storeOpenOrder.orderuuid = _orderuuid;
-        storeOpenOrder.seller = _seller;
-        storeOpenOrder.sellerTokens = _sellerTokens;
-        storeOpenOrder.sellerTokenQty = _sellerTokenQty;
-        storeOpenOrder.bidPrice = _bidPrice;
-        storeOpenOrder.orderInitialized = true;
-        storeOpenOrder.orderCompleted = _orderCompleted;
-        
-        orderBasketsAccts.push(_orderuuid) -1;
-        
-        return true;
-
-    }
-    
-    //function to store previous contract address
-    function previousContractAddrAdd(address _contractAddr) public returns (bool) {
-        if(owner != msg.sender){
-            GeneralErrorEvent(9, "you are not owner, reverting!");
-            revert();
-        }
-        previousContractAddr = _contractAddr;
-        return true;
     }
     
     function swapTokensOwner(address[] tokenAddress, uint256[] value) public returns(uint256 number) {
